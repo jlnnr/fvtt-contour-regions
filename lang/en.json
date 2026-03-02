@@ -1,0 +1,39 @@
+{
+  "CONTOUR_REGIONS": {
+    "ModuleTitle": "Contour Regions",
+    "Controls": {
+      "GroupLabel": "Contour Regions",
+      "PaintTool": "Paint Elevation",
+      "EraseTool": "Erase Elevation",
+      "FillTool": "Flood Fill",
+      "FlattenTool": "Flatten Elevation",
+      "LockPainted": "Lock Painted — raise empty only",
+      "SlopeTool": "Gradient Brush",
+      "LineTool": "Line Gradient",
+      "ClearCanvas": "Clear Heightmap",
+      "OpenSettings": "Contour Settings"
+    },
+    "Settings": {
+      "Title": "Contour Region Settings",
+      "BaseElevation": "Base Elevation",
+      "BaseElevationHint": "Elevation of unpainted cells (ground level).",
+      "ContourIncrement": "Contour Increment",
+      "ContourIncrementHint": "Elevation change per contour band (e.g. 5 for 5ft steps).",
+      "CellResolution": "Cell Resolution",
+      "CellResolutionHint": "Pixel size per heightmap cell. Smaller values produce smoother terrain.",
+      "LayerOpacity": "Layer Opacity",
+      "ConvertToRegions": "Convert to Regions",
+      "ImportHeightmap": "Import Heightmap",
+      "ClearHeightmap": "Clear Heightmap",
+      "ConvertConfirm": "This will delete existing Contour Region regions and recreate them. Continue?",
+      "ClearConfirm": "This will erase all painted elevation data. Continue?"
+    },
+    "Notifications": {
+      "TerrainMapperMissing": "Contour Regions: TerrainMapper module is not active. Regions will be created without plateau behaviors.",
+      "ConvertSuccess": "Created {count} terrain regions.",
+      "ConvertError": "Failed to create regions: {error}",
+      "ImportSuccess": "Imported \"{name}\" as heightmap.",
+      "ImportError": "Heightmap import failed: {error}"
+    }
+  }
+}

@@ -1,0 +1,426 @@
+/* ============================================================
+   contour-regions | styles/module.css
+   ============================================================ */
+
+/* ── Contour Settings window (ApplicationV2) ── */
+
+#contour-regions-settings {
+  min-width: 380px;
+}
+
+/* Fieldsets used to group related controls */
+#contour-regions-settings .cr-fieldset {
+  border: 1px solid var(--color-border-light-tertiary, #888);
+  border-radius: 4px;
+  padding: 8px 12px 10px;
+  margin-bottom: 10px;
+}
+
+#contour-regions-settings .cr-fieldset legend {
+  font-weight: bold;
+  font-size: 0.9em;
+  padding: 0 6px;
+  color: var(--color-text-dark-secondary, #444);
+}
+
+/* Slightly narrower label column so inputs have more room */
+#contour-regions-settings .form-group label {
+  flex: 0 0 140px;
+}
+
+/* Inline value display next to sliders ("50%" / "3") */
+#contour-regions-settings .cr-slider-value {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+  min-width: 3ch;
+  font-size: 0.9em;
+  color: var(--color-text-dark-secondary, #555);
+}
+
+/* Units label in form group labels */
+#contour-regions-settings .units {
+  font-weight: normal;
+  font-size: 0.85em;
+  color: var(--color-text-dark-secondary, #666);
+}
+
+/* ── Elevation legend ── */
+#contour-regions-settings .cr-legend-fieldset {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+#contour-regions-settings .elevation-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+#contour-regions-settings .elevation-legend .band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85em;
+}
+
+#contour-regions-settings .elevation-legend .band .swatch {
+  width: 28px;
+  height: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+#contour-regions-settings .elevation-legend .band .label {
+  color: var(--color-text-dark-primary, #333);
+}
+
+/* ── Footer buttons ── */
+#contour-regions-settings .sheet-footer {
+  gap: 6px;
+  padding: 8px 0 0;
+}
+
+#contour-regions-settings .sheet-footer button {
+  flex: 1;
+}
+
+/* The "Clear" button uses a muted danger colour */
+#contour-regions-settings .cr-danger {
+  color: #c0392b;
+  border-color: #c0392b;
+}
+
+#contour-regions-settings .cr-danger:hover {
+  background: #c0392b;
+  color: #fff;
+}
+
+/* ── Canvas elevation legend overlay ── */
+/*
+ * #cr-canvas-legend is injected directly into #board (the FoundryVTT canvas
+ * container div) by ContourLayer.
+ * Uses position:fixed so it renders above the PIXI canvas element regardless
+ * of stacking context — position:absolute at z-index:60 was being painted
+ * under the canvas during active brushstrokes.
+ */
+
+#cr-canvas-legend {
+  position: fixed;   /* viewport-relative — guaranteed above the PIXI canvas */
+  top: 12px;
+  right: 12px;
+  z-index: 500;      /* above canvas; below FoundryVTT app windows (~9999) */
+
+  background: rgba(0, 0, 0, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 8px 10px;
+
+  pointer-events: none; /* clicks pass through to the canvas */
+  user-select: none;
+  min-width: 110px;
+}
+
+#cr-canvas-legend .cr-legend-title {
+  color: rgba(255, 255, 255, 0.65);
+  font-size: 0.72em;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+#cr-canvas-legend .cr-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+#cr-canvas-legend .cr-legend-row:last-child {
+  margin-bottom: 0;
+}
+
+#cr-canvas-legend .cr-legend-swatch {
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex-shrink: 0;
+}
+
+#cr-canvas-legend .cr-legend-label {
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Note shown when palette cycles (numBands > palette length) */
+#cr-canvas-legend .cr-legend-note {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.68em;
+  font-style: italic;
+  margin-top: 4px;
+  text-align: center;
+}
+
+/* ── Canvas brush overlay panel ── */
+/*
+ * #cr-brush-overlay is injected into #board by ContourLayer when the
+ * Contour Regions control group is active. It provides real-time brush
+ * controls (radius, steepness, direction toggles, etc.)
+ */
+
+#cr-brush-overlay {
+  position: absolute;
+  top: 52px; /* below FoundryVTT's navigation bar */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100; /* above canvas layers and legend */
+
+  background: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  padding: 8px 14px 10px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+
+  pointer-events: auto; /* interactive — NOT click-through */
+  user-select: none;
+  min-width: 240px;
+  max-width: 380px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+}
+
+#cr-brush-overlay .cr-overlay-title {
+  font-weight: bold;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 6px;
+  text-align: center;
+  cursor: grab;
+}
+
+#cr-brush-overlay .cr-overlay-title:active {
+  cursor: grabbing;
+}
+
+#cr-brush-overlay .cr-overlay-group {
+  margin-bottom: 6px;
+}
+
+#cr-brush-overlay .cr-overlay-group:last-child {
+  margin-bottom: 0;
+}
+
+#cr-brush-overlay .cr-overlay-group label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9em;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 2px;
+}
+
+#cr-brush-overlay .cr-overlay-value {
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.65);
+  margin-left: auto;
+  font-size: 0.85em;
+}
+
+/* Range sliders within the overlay */
+#cr-brush-overlay input[type="range"] {
+  width: 100%;
+  cursor: pointer;
+  accent-color: #5aad6f;
+  margin: 2px 0;
+}
+
+/* ── Import preview floating bar ── */
+/*
+ * #cr-import-bar is injected into #board by ContourLayer.#showImportBar()
+ * while an image is being positioned on the canvas before import.
+ * Sits at the top-center of the board, above the canvas but below the toolbar.
+ */
+#cr-import-bar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: rgba(16, 16, 20, 0.92);
+  color: #ececec;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  font-size: 13px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+#cr-import-bar .cr-import-hint {
+  opacity: 0.78;
+  margin-right: 4px;
+}
+
+#cr-import-bar button {
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: filter 0.1s;
+}
+
+#cr-import-bar button:hover {
+  filter: brightness(1.15);
+}
+
+#cr-import-bar button.cr-import-confirm {
+  background: #2a7d4f;
+  color: #fff;
+}
+
+#cr-import-bar button.cr-import-cancel {
+  background: #6b2020;
+  color: #fff;
+}
+
+/* ── Import confirm panel (replaces form content while preview is active) ── */
+
+.cr-import-confirm-panel {
+  padding: 24px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.cr-import-confirm-panel .cr-import-confirm-hint {
+  color: var(--color-text-dark-secondary, #555);
+  font-size: 0.88em;
+  line-height: 1.6;
+}
+
+.cr-import-confirm-panel .cr-import-confirm-hint i {
+  font-size: 2em;
+  margin-bottom: 8px;
+  display: block;
+  color: var(--color-text-dark-secondary, #777);
+}
+
+.cr-import-confirm-panel .cr-import-confirm-actions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.cr-import-confirm-panel .cr-import-apply-btn,
+.cr-import-confirm-panel .cr-import-cancel-btn {
+  flex: 1;
+  padding: 9px 0;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95em;
+  transition: filter 0.1s;
+}
+
+.cr-import-confirm-panel .cr-import-apply-btn {
+  background: #2a7d4f;
+  color: #fff;
+}
+
+.cr-import-confirm-panel .cr-import-apply-btn:hover {
+  filter: brightness(1.15);
+}
+
+.cr-import-confirm-panel .cr-import-cancel-btn {
+  background: #6b2020;
+  color: #fff;
+}
+
+.cr-import-confirm-panel .cr-import-cancel-btn:hover {
+  filter: brightness(1.15);
+}
+
+/* Number inputs within the overlay */
+#cr-brush-overlay input[type="number"] {
+  width: 80px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  color: #fff;
+  padding: 2px 6px;
+  font-size: 0.9em;
+}
+
+/* Raise/Lower and Increase/Decrease radio rows */
+#cr-brush-overlay .cr-overlay-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+}
+
+#cr-brush-overlay .cr-overlay-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+#cr-brush-overlay .cr-overlay-row input[type="radio"] {
+  accent-color: #5aad6f;
+  cursor: pointer;
+}
+
+/* Hint text for the erase tool */
+#cr-brush-overlay .cr-overlay-hint {
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+  font-size: 0.85em;
+  text-align: center;
+  padding: 2px 0;
+}
+
+/* ── Import preview canvas hint ── */
+/*
+ * #cr-import-hint is injected into document.body by ContourLayer.startImportPreview().
+ * It stays visible even while the settings window is minimized, so the GM
+ * always knows how to move and resize the preview sprite.
+ * Removed automatically by #cleanupImportPreview().
+ */
+#cr-import-hint {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+
+  background: rgba(16, 16, 20, 0.88);
+  color: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 7px 16px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
+
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}

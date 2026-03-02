@@ -1,0 +1,156 @@
+{{!--
+  contour-settings.hbs
+  Template for the ContourSettings ApplicationV2 window.
+
+  Variables from ContourSettings._prepareContext():
+    baseElevation    — number
+    increment        — number (supports decimals)
+    numBands         — number
+    opacity          — number (0-100 integer percentage)
+    showContourLines — boolean
+    cellSize         — number (pixel resolution, 5-50)
+    paletteOptions   — array of { value, label, selected }
+    palette          — array of { band, colorHex, elevation }
+    units            — string (e.g. "ft", "m") — display label only
+--}}
+
+{{!--
+  ApplicationV2 requires the template to render a SINGLE root HTML element.
+  Everything must live inside this wrapper div.
+--}}
+<div class="contour-settings-content">
+
+{{!-- ═══════════════════════════════════════════════════════════
+     CONTOUR MAP SETTINGS
+     ═══════════════════════════════════════════════════════════ --}}
+<fieldset class="cr-fieldset">
+  <legend>Contour Map</legend>
+
+  <div class="form-group">
+    <label>Units</label>
+    <div class="form-fields">
+      <input type="text" name="units" value="{{units}}" maxlength="16" style="width:6em;">
+    </div>
+    <p class="hint">Label appended to elevation values (e.g. ft, m). Display only — does not affect stored data.</p>
+  </div>
+
+  <div class="form-group">
+    <label>Base Elevation <span class="units">({{units}})</span></label>
+    <div class="form-fields">
+      <input type="number" name="baseElevation" value="{{baseElevation}}" min="0" step="1">
+    </div>
+    <p class="hint">Elevation of unpainted (sea-level) cells.</p>
+  </div>
+
+  <div class="form-group">
+    <label>Increment <span class="units">({{units}} per band)</span></label>
+    <div class="form-fields">
+      <input type="number" name="increment" value="{{increment}}" min="0.01" max="1000" step="any">
+    </div>
+    <p class="hint">Height difference between contour bands. Supports decimals (e.g. 0.5 for half-metre steps).</p>
+  </div>
+
+  <div class="form-group">
+    <label>Number of Bands</label>
+    <div class="form-fields">
+      <input type="number" name="numBands" value="{{numBands}}" min="1" max="100" step="1">
+    </div>
+    <p class="hint">How many distinct elevation levels to show (max 100).</p>
+  </div>
+
+  <div class="form-group">
+    <label>Layer Opacity <span class="cr-slider-value" data-for="opacity">{{opacity}}%</span></label>
+    <div class="form-fields">
+      <input type="range" name="opacity" value="{{opacity}}" min="0" max="100" step="5">
+    </div>
+  </div>
+
+  {{!-- ── Cell Resolution ──────────────────────────────────────── --}}
+  <div class="form-group">
+    <label>Cell Resolution <span class="units">(px)</span></label>
+    <div class="form-fields">
+      <input type="number" name="cellSize" value="{{cellSize}}" min="5" max="50" step="1">
+    </div>
+    <p class="hint">Pixel size per heightmap cell. Smaller = smoother terrain, larger = faster. Changing this discards existing heightmap data.</p>
+  </div>
+
+  {{!-- ── Palette selector ───────────────────────────────────────── --}}
+  <div class="form-group">
+    <label>Color Palette</label>
+    <div class="form-fields">
+      <select name="palette">
+        {{#each paletteOptions}}
+          <option value="{{value}}" {{#if selected}}selected{{/if}}>{{label}}</option>
+        {{/each}}
+      </select>
+    </div>
+    <p class="hint">Color scheme used to render elevation bands on canvas.</p>
+  </div>
+
+  {{!-- ── Contour lines toggle ──────────────────────────────────────── --}}
+  <div class="form-group">
+    <label>Contour Lines</label>
+    <div class="form-fields">
+      <input type="checkbox" name="showContourLines" {{#if showContourLines}}checked{{/if}}>
+    </div>
+    <p class="hint">Draw boundary lines with elevation labels between bands.</p>
+  </div>
+
+  {{!-- ── Continuous palette toggle ──────────────────────────────────── --}}
+  <div class="form-group">
+    <label>Continuous Palette</label>
+    <div class="form-fields">
+      <input type="checkbox" name="continuousPalette" {{#if continuousPalette}}checked{{/if}}>
+    </div>
+    <p class="hint">
+      When checked, the palette is stretched smoothly across all bands (band 1 = palette
+      start, band <em>N</em> = palette end).  When unchecked, colors repeat every
+      {{!-- palette length is implicitly 10 --}} 10 bands.
+    </p>
+  </div>
+</fieldset>
+
+{{!-- ═══════════════════════════════════════════════════════════
+     ELEVATION LEGEND
+     Shows the color → elevation mapping for the current settings.
+     Re-renders when "Apply" is clicked (whole window re-renders).
+     ═══════════════════════════════════════════════════════════ --}}
+<fieldset class="cr-fieldset cr-legend-fieldset">
+  <legend>Elevation Legend</legend>
+  <div class="elevation-legend">
+    {{#each palette}}
+    <div class="band">
+      <span class="swatch" style="background-color: {{colorHex}};"></span>
+      <span class="label">Band {{band}} — {{elevation}} {{../units}}</span>
+    </div>
+    {{else}}
+    <p class="hint">No elevation data yet. Paint some cells to populate the legend.</p>
+    {{/each}}
+  </div>
+</fieldset>
+
+{{!-- ═══════════════════════════════════════════════════════════
+     ACTION BUTTONS
+     ═══════════════════════════════════════════════════════════ --}}
+<footer class="sheet-footer flexrow">
+  <button type="submit" name="apply">
+    <i class="fa-solid fa-check"></i> Apply
+  </button>
+  <button type="button" data-action="convert">
+    <i class="fa-solid fa-wand-magic-sparkles"></i> Convert to Regions
+  </button>
+  <button type="button" data-action="import">
+    <i class="fa-solid fa-file-import"></i> Import Heightmap
+  </button>
+  <button type="button" data-action="export">
+    <i class="fa-solid fa-file-export"></i> Export Heightmap
+  </button>
+  <button type="button" data-action="clear" class="cr-danger">
+    <i class="fa-solid fa-trash"></i> Clear Heightmap
+  </button>
+  <button type="button" data-action="close">
+    <i class="fa-solid fa-xmark"></i> Close
+  </button>
+</footer>
+
+</div>{{!-- .contour-settings-content --}}
