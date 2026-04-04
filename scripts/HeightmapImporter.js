@@ -222,15 +222,16 @@ export async function showImportOptionsDialog(analysis, currentSettings) {
 /**
  * Sample pixel data from an image into a HeightmapData.
  *
- * Only heightmap cells whose scene-space centre falls inside `spriteRect`
- * are modified.  Cells outside the sprite footprint are left unchanged,
- * so a small import image can be placed on just one part of the scene.
+ * Only heightmap cells whose scene-space centre falls inside the sprite
+ * footprint are modified.  Cells outside are left unchanged, so a small
+ * import image can be placed on just one part of the scene.
  *
  * @param {Uint8ClampedArray} pixels     RGBA pixel data from analyzeImage()
  * @param {number}            imgW       Image width in pixels
  * @param {number}            imgH       Image height in pixels
- * @param {{x:number,y:number,width:number,height:number}} spriteRect
- *   Current position/size of the preview sprite in scene coordinates.
+ * @param {{x:number,y:number,width:number,height:number,rotation?:number}} spriteRect
+ *   Current position/size/rotation of the preview sprite in scene coordinates.
+ *   x/y are the world-space CENTRE (center-pivot); rotation is in radians (default 0).
  * @param {HeightmapData} heightmap      Destination heightmap (mutated in-place)
  * @param {object}        options        { baseElevation, increment, numBands, mode, invert }
  */
@@ -240,18 +241,28 @@ export function sampleToHeightmap(pixels, imgW, imgH, spriteRect, heightmap, opt
   const sceneOffsetX = canvas.dimensions.sceneRect.x;
   const sceneOffsetY = canvas.dimensions.sceneRect.y;
 
+  const { x: centerX, y: centerY, width: sw, height: sh, rotation = 0 } = spriteRect;
+  const cosT  = Math.cos(-rotation);
+  const sinT  = Math.sin(-rotation);
+  const hw = sw / 2, hh = sh / 2;
+
   for (let cy = 0; cy < rows; cy++) {
     for (let cx = 0; cx < cols; cx++) {
       // Scene-space centre of this cell
       const sceneX = sceneOffsetX + cx * cellSize + cellSize * 0.5;
       const sceneY = sceneOffsetY + cy * cellSize + cellSize * 0.5;
 
-      // Normalised position within the sprite (0 … 1)
-      const normX = (sceneX - spriteRect.x) / spriteRect.width;
-      const normY = (sceneY - spriteRect.y) / spriteRect.height;
+      // Translate to sprite-centre-relative coordinates and un-rotate
+      const dx = sceneX - centerX, dy = sceneY - centerY;
+      const lx = dx * cosT - dy * sinT; // local X in sprite space
+      const ly = dx * sinT + dy * cosT; // local Y in sprite space
 
       // Skip cells outside the sprite footprint
-      if (normX < 0 || normX > 1 || normY < 0 || normY > 1) continue;
+      if (lx < -hw || lx > hw || ly < -hh || ly > hh) continue;
+
+      // Normalised position within the sprite (0 … 1)
+      const normX = (lx + hw) / sw;
+      const normY = (ly + hh) / sh;
 
       // Nearest-neighbour sample
       const imgX = Math.min(imgW - 1, Math.floor(normX * imgW));
@@ -267,7 +278,7 @@ export function sampleToHeightmap(pixels, imgW, imgH, spriteRect, heightmap, opt
       if (invert) brightness = 1 - brightness;
 
       const band = Math.round(brightness * numBands);
-      const elev = band === 0 ? 0 : baseElevation + band * increment;
+      const elev = baseElevation + band * increment; // black (band 0) → baseElevation
       heightmap.set(cx, cy, Math.max(0, Math.min(65535, elev)));
     }
   }

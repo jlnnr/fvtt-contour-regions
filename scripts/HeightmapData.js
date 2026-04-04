@@ -70,6 +70,15 @@ export class HeightmapData {
   // ──────────────────────────────────────────────────────────────
 
   /**
+   * Read-only view of the raw elevation data (a direct reference, not a copy).
+   * Use takeSnapshot() when you need an independent copy.
+   * @returns {Uint16Array}
+   */
+  get data() {
+    return this.#data;
+  }
+
+  /**
    * Return a copy of the internal elevation data.
    * Used to capture the heightmap state at the start of a paint stroke
    * so that brush application can be capped relative to the original values.
@@ -515,6 +524,11 @@ export class HeightmapData {
     // BOUNDARY → no change (snapshot value already in work[ci]).
     // INTERIOR → blend snapshot toward Laplace solution by `str` then snap.
     // Snapping is done here, not during iteration, to avoid numerical drift.
+    //
+    // Gap prevention: if a cell was painted in the snapshot (elevation > 0),
+    // the snapped result must never become 0.  Rounding a blended value that
+    // falls below inc/2 would otherwise create unpainted holes — especially
+    // visible with large cell sizes where each missing cell is a large area.
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
         const ci = (y - minY) * W + (x - minX);
@@ -522,7 +536,10 @@ export class HeightmapData {
         const orig    = snapshot[y * cols + x];
         const blended = orig + (work[ci] - orig) * str;
         const snapped = Math.round(blended / inc) * inc;
-        this.#data[y * cols + x] = Math.max(0, Math.min(65535, snapped));
+        // Painted cells must remain painted — clamp to inc so rounding near
+        // zero doesn't erase them and create gaps between contour regions.
+        const minVal  = orig > 0 ? inc : 0;
+        this.#data[y * cols + x] = Math.max(minVal, Math.min(65535, snapped));
       }
     }
   }
@@ -619,42 +636,50 @@ export class HeightmapData {
     const minY = Math.max(0,              Math.floor(bMinY - halfW));
     const maxY = Math.min(this.rows - 1,  Math.ceil(bMaxY  + halfW));
 
+    const lastSeg = cellPts.length - 2;
+
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
-        // Find the nearest point on the polyline and its interpolated elevation
+        // Use cell center for all geometric tests (consistent with polygon fill)
+        const cellX = x + 0.5;
+        const cellY = y + 0.5;
+
+        // Find the nearest point on the polyline and its elevation.
         let bestDist2 = Infinity;
         let bestElev  = 0;
+        let bestSeg   = 0;
+        let bestTRaw  = 0;
 
-        const lastSeg = cellPts.length - 2;
         for (let i = 0; i <= lastSeg; i++) {
-          const a = cellPts[i];
-          const b = cellPts[i + 1];
-          const abx = b.cx - a.cx;
-          const aby = b.cy - a.cy;
+          const a = cellPts[i], b = cellPts[i + 1];
+          const abx = b.cx - a.cx, aby = b.cy - a.cy;
           const len2 = abx * abx + aby * aby;
           const tRaw = len2 > 0
-            ? ((x - a.cx) * abx + (y - a.cy) * aby) / len2
+            ? ((cellX - a.cx) * abx + (cellY - a.cy) * aby) / len2
             : 0;
-
-          // Flat (butt) cap: skip cells that project outside the polyline's
-          // extent at either endpoint.  Interior vertices are covered by the
-          // adjacent segment, so they don't need special handling.
-          if (i === 0       && tRaw < 0) continue; // before the start
-          if (i === lastSeg && tRaw > 1) continue; // past the end
-
           const t  = Math.max(0, Math.min(1, tRaw));
-          const px = a.cx + t * abx;
-          const py = a.cy + t * aby;
-          const dx = x - px, dy = y - py;
+          const px = a.cx + t * abx, py = a.cy + t * aby;
+          const dx = cellX - px, dy = cellY - py;
           const dist2 = dx * dx + dy * dy;
 
           if (dist2 < bestDist2) {
             bestDist2 = dist2;
+            // Linear interpolation: step boundaries land at segment midpoints
+            // rather than endpoints, preventing non-adjacent bands from touching
+            // at sharp bends.
             bestElev  = a.elev + t * (b.elev - a.elev);
+            bestSeg   = i;
+            bestTRaw  = tRaw;
           }
         }
 
         if (bestDist2 > halfW * halfW) continue; // outside corridor
+
+        // Butt-cap: skip cells that project beyond the polyline endpoints.
+        // Only applied to cells whose closest segment is the first/last,
+        // so bends near the start/end are not incorrectly clipped.
+        if (bestSeg === 0 && bestTRaw < 0) continue;
+        if (bestSeg === lastSeg && bestTRaw > 1) continue;
 
         const idx = y * this.cols + x;
         if (lockPainted && this.#data[idx] > 0) continue; // skip painted cells

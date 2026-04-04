@@ -103,6 +103,19 @@ export function registerControls() {
             },
         },
 
+        picker: {
+            name: "picker",
+            title: game.i18n.localize("CONTOUR_REGIONS.Controls.PickerTool"),
+            icon: "fa-solid fa-eye-dropper",
+            onChange: (active) => {
+                if (!active) return;
+                BrushState.prePicker = BrushState.mode !== "picker" ? BrushState.mode : BrushState.prePicker;
+                BrushState.mode = "picker";
+                canvas.contourRegions?.refreshCursor();
+                canvas.contourRegions?.updateOverlayForTool();
+            },
+        },
+
         lockPainted: {
           name: "lockPainted",
           title: game.i18n.localize("CONTOUR_REGIONS.Controls.LockPainted"),
@@ -180,6 +193,28 @@ export function registerKeybindings() {
       if (slider) slider.value = BrushState.radius;
       const display = document.querySelector('#cr-brush-overlay .cr-overlay-value[data-for="radius"]');
       if (display) display.textContent = `${BrushState.radius}px`;
+      return true;
+    },
+    restricted: true,
+    precedence: CONST.KEYBINDING_PRECEDENCE.NORMAL,
+  });
+
+  game.keybindings.register("contour-regions", "pickerTool", {
+    name: "Elevation Picker",
+    hint: "Hold to temporarily activate the elevation picker. Release to return to the previous tool.",
+    editable: [{ key: "KeyE" }],
+    onDown: () => {
+      if (!canvas.contourRegions?._isLayerActive()) return false;
+      if (BrushState.mode === "picker") return false;
+      BrushState.prePicker = BrushState.mode;
+      // Click the picker toolbar button to keep the UI in sync
+      document.querySelector('[data-tool="picker"]')?.click();
+      return true;
+    },
+    onUp: () => {
+      if (!canvas.contourRegions?._isLayerActive()) return false;
+      if (BrushState.mode !== "picker") return false;
+      canvas.contourRegions.activateTool(BrushState.prePicker);
       return true;
     },
     restricted: true,

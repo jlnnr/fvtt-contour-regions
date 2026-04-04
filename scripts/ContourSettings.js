@@ -145,9 +145,14 @@ export class ContourSettings extends foundry.applications.api.HandlebarsApplicat
   _onRender(context, options) {
     super._onRender(context, options);
 
-    // Import preview mode: replace form content with Confirm / Cancel panel.
-    // _prepareContext still builds the full settings context (so the template
-    // renders without errors), but we immediately swap in the panel UI.
+    // Always remove any stale import overlay first.  If we're now back to normal
+    // mode the overlay is cleaned up here; if we're still in import mode a fresh
+    // one is added below.
+    this.element.querySelector(".cr-import-overlay")?.remove();
+
+    // Import preview mode: layer an overlay on top of the (untouched) form part.
+    // We deliberately do NOT modify the form part's DOM so that Foundry's normal
+    // part-update cycle continues to work — the overlay lives alongside the part.
     if (canvas.contourRegions?.isImportPreviewActive) {
       this.#renderImportPanel();
       return; // skip normal slider wiring
@@ -200,7 +205,7 @@ export class ContourSettings extends foundry.applications.api.HandlebarsApplicat
     const newNumBands          = Math.max(1, Math.min(100, Number(d.numBands) || CONTOUR_DEFAULTS.numBands));
     const _rawOpacity          = Number(d.opacity);
     const newOpacity           = Math.max(0, Math.min(100, isNaN(_rawOpacity) ? 50 : _rawOpacity)) / 100;
-    const newCellSize          = Math.max(5, Math.min(50, Number(d.cellSize) || CONTOUR_DEFAULTS.cellSize));
+    const newCellSize          = Math.max(5, Math.min(200, Number(d.cellSize) || CONTOUR_DEFAULTS.cellSize));
     const newPalette           = d.palette in PALETTE_LABELS ? d.palette : CONTOUR_DEFAULTS.palette;
     const newShowContourLines  = !!d.showContourLines;
     const newContinuousPalette = !!d.continuousPalette;
@@ -443,34 +448,52 @@ export class ContourSettings extends foundry.applications.api.HandlebarsApplicat
   // ── Import preview panel ──────────────────────────────────────────────────
 
   /**
-   * Replace the window-content area with a minimal Confirm / Cancel panel.
+   * Append an absolutely-positioned overlay on top of the settings window.
    * Called from _onRender() when an import preview is active.
-   * The normal settings form has already been rendered by Handlebars; we
-   * immediately swap it out so the user sees only the two action buttons.
+   *
+   * Critically, this does NOT touch any Foundry part-container innerHTML.
+   * The form part remains intact in the DOM so that Foundry's part-update
+   * cycle keeps working.  The overlay simply covers it visually and is
+   * removed by _onRender() on the next render after the preview ends.
    */
   #renderImportPanel() {
-    const content = this.element.querySelector(".window-content");
-    if (!content) return;
+    const overlay = document.createElement("div");
+    overlay.className = "cr-import-overlay";
+    overlay.style.cssText = [
+      "position:absolute", "inset:0", "z-index:10",
+      "background:rgba(10,10,20,0.97)",
+      "display:flex", "flex-direction:column",
+      "align-items:center", "justify-content:center",
+      "gap:12px", "padding:24px", "box-sizing:border-box",
+    ].join(";");
 
-    content.innerHTML = `
-      <div class="cr-import-confirm-panel">
-        <div class="cr-import-confirm-hint">
-          <i class="fa-solid fa-image"></i>
-          Drag the image on the canvas to reposition it.<br>
-          Drag the <strong>■ corner handle</strong> to resize it.<br>
-          When satisfied, confirm the import below.
-        </div>
-        <div class="cr-import-confirm-actions">
-          <button id="cr-conf-apply" type="button" class="cr-import-apply-btn">
-            <i class="fa-solid fa-check"></i>&nbsp;Confirm Import
-          </button>
-          <button id="cr-conf-cancel" type="button" class="cr-import-cancel-btn">
-            <i class="fa-solid fa-xmark"></i>&nbsp;Cancel
-          </button>
-        </div>
+    overlay.innerHTML = `
+      <div class="cr-import-confirm-hint">
+        <i class="fa-solid fa-image"></i>
+        Drag the image to reposition it.<br>
+        Drag any <strong>corner</strong> to resize.<br>
+        <strong>Shift+drag</strong> corner to preserve aspect ratio.<br>
+        <strong>Ctrl+drag</strong> the image to rotate it.<br>
+        When satisfied, confirm the import below.
+      </div>
+      <div class="cr-import-confirm-actions">
+        <button id="cr-conf-apply" type="button" class="cr-import-apply-btn">
+          <i class="fa-solid fa-check"></i>&nbsp;Confirm Import
+        </button>
+        <button id="cr-conf-cancel" type="button" class="cr-import-cancel-btn">
+          <i class="fa-solid fa-xmark"></i>&nbsp;Cancel
+        </button>
       </div>`;
 
-    this.element.querySelector("#cr-conf-apply")?.addEventListener("click", async () => {
+    // Append to .window-content so the overlay is scoped to the window body.
+    // Ensure the parent has a non-static position so the absolute overlay works.
+    const winContent = this.element.querySelector(".window-content") ?? this.element;
+    if (getComputedStyle(winContent).position === "static") {
+      winContent.style.position = "relative";
+    }
+    winContent.appendChild(overlay);
+
+    overlay.querySelector("#cr-conf-apply")?.addEventListener("click", async () => {
       try {
         await canvas.contourRegions?.applyImportPreview();
         ui.notifications.info("Heightmap imported.");
@@ -478,16 +501,11 @@ export class ContourSettings extends foundry.applications.api.HandlebarsApplicat
         ui.notifications.error(`Import failed: ${err.message}`);
         console.error("contour-regions | Import confirm error:", err);
       }
-      // applyImportPreview calls #cleanupImportPreview which fires
-      // foundry.applications.instances re-render, but call it here too
-      // in case the preview was already gone.
       this.render({ force: true });
     });
 
-    this.element.querySelector("#cr-conf-cancel")?.addEventListener("click", () => {
+    overlay.querySelector("#cr-conf-cancel")?.addEventListener("click", () => {
       canvas.contourRegions?.cancelImportPreview();
-      // cancelImportPreview → #cleanupImportPreview → re-render via instances
-      // Render here as well for safety.
       this.render({ force: true });
     });
   }

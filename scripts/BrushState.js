@@ -16,13 +16,20 @@
 export const BrushState = {
   /**
    * Active tool mode.
-   * @type {"paint"|"erase"|"fill"|"flatten"|"slope"|"line"}
+   * @type {"paint"|"erase"|"fill"|"flatten"|"slope"|"line"|"picker"}
    */
   mode: "paint",
 
   /**
+   * The tool mode that was active before switching to "picker".
+   * Used to automatically return to the previous tool after sampling.
+   * @type {string}
+   */
+  prePicker: "paint",
+
+  /**
    * Brush radius in **pixels** (scene-space).
-   * Range: 10–500.  Converted to cell coordinates at point of use.
+   * Range: 10–2000.  Converted to cell coordinates at point of use.
    * @type {number}
    */
   radius: 50,
@@ -88,16 +95,20 @@ export const BrushState = {
   lockPainted: false,
 
   /**
-   * Increase the brush radius by 10px, capped at 500.
+   * Increase the brush radius, capped at 2000.
+   * Steps are 10px up to 500, then 100px above 500.
    */
   increaseRadius() {
-    this.radius = Math.min(500, this.radius + 10);
+    const step = this.radius >= 500 ? 100 : 10;
+    this.radius = Math.min(2000, this.radius + step);
   },
 
   /**
-   * Decrease the brush radius by 10px, minimum 10.
+   * Decrease the brush radius, minimum 10.
+   * Steps are 10px up to 500, then 100px above 500.
    */
   decreaseRadius() {
-    this.radius = Math.max(10, this.radius - 10);
+    const step = this.radius > 500 ? 100 : 10;
+    this.radius = Math.max(10, this.radius - step);
   },
 };

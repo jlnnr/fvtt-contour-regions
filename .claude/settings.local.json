@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"applyImportPreview\\\\|importPreviewEnded\\\\|Hooks.on.*importPreviewEnded\" \"/c/Users/julia/Documents/GitHub/fvtt-contour-regions/scripts\"/*.js)",
+      "Bash(cp \"C:/Users/julia/Documents/GitHub/fvtt-contour-regions/scripts/ContourLayer.js\" \"C:/Users/julia/ContourRegions/scripts/ContourLayer.js\")",
+      "Bash(cp \"C:/Users/julia/Documents/GitHub/fvtt-contour-regions/scripts/ContourSettings.js\" \"C:/Users/julia/ContourRegions/scripts/ContourSettings.js\")",
+      "Bash(cp \"C:/Users/julia/Documents/GitHub/fvtt-contour-regions/scripts/HeightmapData.js\" \"C:/Users/julia/ContourRegions/scripts/HeightmapData.js\")",
+      "Bash(cp \"C:/Users/julia/Documents/GitHub/fvtt-contour-regions/scripts/HeightmapImporter.js\" \"C:/Users/julia/ContourRegions/scripts/HeightmapImporter.js\")",
+      "Bash(cp \"C:/Users/julia/Documents/GitHub/fvtt-contour-regions/scripts/RegionConverter.js\" \"C:/Users/julia/ContourRegions/scripts/RegionConverter.js\")",
+      "Bash(cp \"C:/Users/julia/Documents/GitHub/fvtt-contour-regions/templates/contour-settings.hbs\" \"C:/Users/julia/ContourRegions/templates/contour-settings.hbs\")"
+    ]
+  }
+}

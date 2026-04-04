@@ -88,6 +88,73 @@ function applyMajorityFilter(bandGrid, cols, rows, passes) {
 }
 
 /**
+ * Apply a separable box blur to a raw elevation array.
+ *
+ * Averaging elevation values before band-grid construction lets high
+ * smoothing levels merge small protrusions across band boundaries,
+ * which the categorical majority filter cannot do on its own.
+ *
+ * @param {Uint16Array} elevData  Raw elevation grid (row-major, values 0–65535)
+ * @param {number}      cols
+ * @param {number}      rows
+ * @param {number}      radius    Box-blur radius in cells (1 = 3×3 kernel)
+ * @param {number}      blurPasses Number of box-blur passes (3 ≈ Gaussian)
+ * @returns {Float32Array}  Blurred elevation array
+ */
+function blurElevations(elevData, cols, rows, radius, blurPasses) {
+  let src = new Float32Array(elevData); // copy to float for accumulation
+
+  for (let pass = 0; pass < blurPasses; pass++) {
+    const tmp = new Float32Array(src.length);
+    const kw  = radius * 2 + 1;
+
+    // Horizontal pass
+    for (let cy = 0; cy < rows; cy++) {
+      let sum = 0;
+      let cnt = 0;
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = dx;
+        if (nx < 0 || nx >= cols) continue;
+        sum += src[cy * cols + nx];
+        cnt++;
+      }
+      for (let cx = 0; cx < cols; cx++) {
+        tmp[cy * cols + cx] = sum / cnt;
+        // Slide window right
+        const removeX = cx - radius;
+        const addX    = cx + radius + 1;
+        if (removeX >= 0) { sum -= src[cy * cols + removeX]; cnt--; }
+        if (addX < cols)  { sum += src[cy * cols + addX];    cnt++; }
+      }
+    }
+
+    // Vertical pass
+    const out = new Float32Array(tmp.length);
+    for (let cx = 0; cx < cols; cx++) {
+      let sum = 0;
+      let cnt = 0;
+      for (let dy = -radius; dy <= radius; dy++) {
+        const ny = dy;
+        if (ny < 0 || ny >= rows) continue;
+        sum += tmp[ny * cols + cx];
+        cnt++;
+      }
+      for (let cy = 0; cy < rows; cy++) {
+        out[cy * cols + cx] = sum / cnt;
+        const removeY = cy - radius;
+        const addY    = cy + radius + 1;
+        if (removeY >= 0) { sum -= tmp[removeY * cols + cx]; cnt--; }
+        if (addY < rows)  { sum += tmp[addY    * cols + cx]; cnt++; }
+      }
+    }
+
+    src = out;
+  }
+
+  return src;
+}
+
+/**
  * Build a flat band-index array from a HeightmapData instance.
  * Band index = Math.floor(elevation / increment).
  *
@@ -104,6 +171,25 @@ export function buildBandGrid(heightmap, increment) {
     for (let cx = 0; cx < cols; cx++) {
       grid[cy * cols + cx] = Math.floor(heightmap.get(cx, cy) / inc);
     }
+  }
+  return grid;
+}
+
+/**
+ * Build a flat band-index array from a raw elevation array (e.g. a blurred copy).
+ * Unpainted cells (elevation 0) remain band 0.
+ *
+ * @param {Float32Array|Uint16Array} elevArray  Flat elevation grid
+ * @param {number}                  cols
+ * @param {number}                  rows
+ * @param {number}                  increment
+ * @returns {Int16Array}
+ */
+function buildBandGridFromArray(elevArray, cols, rows, increment) {
+  const inc  = Math.max(1, increment);
+  const grid = new Int16Array(cols * rows);
+  for (let i = 0; i < cols * rows; i++) {
+    grid[i] = Math.floor(elevArray[i] / inc);
   }
   return grid;
 }
@@ -491,14 +577,26 @@ export async function showConvertDialog(scene, heightmap, settings, paletteInfo)
   let smooth       = false;
   let smoothPasses = 1;
   let minCells     = 9; // default: skip bands smaller than 9 cells (~3×3)
+  let overwrite    = true;
 
   const confirmed = await foundry.applications.api.DialogV2.confirm({
     window:  { title: "Convert Heightmap to Regions" },
     content: `
       <p>
-        Delete and recreate all Contour Region regions from the current
-        heightmap.  Each painted elevation band becomes one or more polygon regions.
+        Convert the current heightmap to Foundry Region documents.
+        Each painted elevation band becomes one or more polygon regions.
       </p>
+      <div class="form-group">
+        <label>Overwrite existing contour regions</label>
+        <div class="form-fields">
+          <input type="checkbox" id="cr-convert-overwrite" checked>
+        </div>
+        <p class="hint">
+          When checked, previously generated Contour Region regions are deleted
+          before creating new ones.  Regions you created manually are never
+          affected.  Uncheck to add new regions without removing the old ones.
+        </p>
+      </div>
       <div class="form-group">
         <label>Smooth polygon edges</label>
         <div class="form-fields">
@@ -518,8 +616,8 @@ export async function showConvertDialog(scene, heightmap, settings, paletteInfo)
         </div>
         <p class="hint">
           1–5 = progressively remove staircase edges (5 = full RDP simplification) &nbsp;·&nbsp;
-          6–10 = additionally run extra majority-filter passes to expand region fills
-          and remove small protrusions
+          6–10 = additionally apply majority-filter passes to merge small protrusions and
+          fill narrow gaps (boundary positions are preserved to ±1 cell)
         </p>
       </div>
       <div class="form-group">
@@ -543,6 +641,7 @@ export async function showConvertDialog(scene, heightmap, settings, paletteInfo)
         // In FoundryVTT v13 the callback receives the ApplicationV2 instance,
         // not the HTMLElement.  Use dialog.element to reach the rendered DOM.
         const root   = dialog.element ?? dialog;
+        overwrite    = root.querySelector("#cr-convert-overwrite")?.checked ?? true;
         smooth       = root.querySelector("#cr-convert-smooth")?.checked ?? false;
         smoothPasses = parseInt(root.querySelector("#cr-convert-passes")?.value  ?? "1", 10) || 1;
         minCells     = parseInt(root.querySelector("#cr-convert-min-cells")?.value ?? "9", 10);
@@ -562,6 +661,7 @@ export async function showConvertDialog(scene, heightmap, settings, paletteInfo)
     smooth,
     smoothPasses: Math.max(1, Math.min(10, smoothPasses)),
     minCells,
+    overwrite,
   });
 }
 
@@ -579,7 +679,7 @@ export async function showConvertDialog(scene, heightmap, settings, paletteInfo)
  */
 export async function convertToRegions(scene, heightmap, settings, paletteInfo, options = {}) {
   const { baseElevation, increment } = settings;
-  const { smooth = false, smoothPasses = 5, minCells = 0 } = options;
+  const { smooth = false, smoothPasses = 5, minCells = 0, overwrite = true } = options;
   const cellSize = heightmap.cellSize;
   const { cols, rows } = heightmap;
 
@@ -603,18 +703,27 @@ export async function convertToRegions(scene, heightmap, settings, paletteInfo, 
   //   3 → 0.95  removes up to 3:1 steps   (18°)
   //   4 → 0.975 removes up to ~5:1 steps  (11°)
   //   5–10 → 0.999 removes virtually all staircase artefacts
-  //   (levels 6–10 increase majority-filter passes instead)
+  //   (levels 6–10 increase majority-filter passes)
   const RDP_EPSILON_FACTORS = [0, 0.72, 0.90, 0.95, 0.975, 0.999, 0.999, 0.999, 0.999, 0.999, 0.999];
   const level      = Math.max(1, Math.min(10, smoothPasses));
   const rdpEpsilon = smooth ? RDP_EPSILON_FACTORS[level] * cellSize : 0;
 
   // ── Build (and optionally smooth) band-index grid ─────────────────────────
-  // Majority-filter passes: levels 1–5 use 1 pass (light clean-up of isolated
-  // single-cell artefacts); levels 6–10 scale up to 6 passes, progressively
-  // widening smoothed region boundaries and filling small protrusions/gaps.
+  // The majority filter works on band indices (categorical), so region
+  // boundaries can only shift by ±1 cell — position is well preserved.
+  //
+  // Majority-filter passes scale with level:
+  //   1–5:  1 pass   (light clean-up of isolated single-cell artefacts)
+  //   6:    2 passes
+  //   7:    4 passes
+  //   8:    6 passes
+  //   9:    9 passes
+  //   10:  12 passes
+  const MAJORITY_PASSES = [0, 1, 1, 1, 1, 1, 2, 4, 6, 9, 12];
+
   let bandGrid = buildBandGrid(heightmap, increment);
   if (smooth) {
-    const majorityPasses = Math.max(1, smoothPasses - 4);
+    const majorityPasses = MAJORITY_PASSES[level];
     bandGrid = applyMajorityFilter(bandGrid, cols, rows, majorityPasses);
   }
 
@@ -631,11 +740,13 @@ export async function convertToRegions(scene, heightmap, settings, paletteInfo, 
   const paletteByBand = new Map(paletteInfo.map(p => [p.band, p.colorHex]));
 
   // ── Remove previously generated regions ──────────────────────────────────
-  const existingIds = scene.regions
-    .filter(r => r.getFlag("contour-regions", "generatedRegion"))
-    .map(r => r.id);
-  if (existingIds.length) {
-    await scene.deleteEmbeddedDocuments("Region", existingIds);
+  if (overwrite) {
+    const existingIds = scene.regions
+      .filter(r => r.getFlag("contour-regions", "generatedRegion"))
+      .map(r => r.id);
+    if (existingIds.length) {
+      await scene.deleteEmbeddedDocuments("Region", existingIds);
+    }
   }
 
   // ── Build region documents ────────────────────────────────────────────────

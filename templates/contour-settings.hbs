@@ -8,7 +8,7 @@
     numBands         — number
     opacity          — number (0-100 integer percentage)
     showContourLines — boolean
-    cellSize         — number (pixel resolution, 5-50)
+    cellSize         — number (pixel resolution, 5-200)
     paletteOptions   — array of { value, label, selected }
     palette          — array of { band, colorHex, elevation }
     units            — string (e.g. "ft", "m") — display label only
@@ -69,7 +69,7 @@
   <div class="form-group">
     <label>Cell Resolution <span class="units">(px)</span></label>
     <div class="form-fields">
-      <input type="number" name="cellSize" value="{{cellSize}}" min="5" max="50" step="1">
+      <input type="number" name="cellSize" value="{{cellSize}}" min="5" max="200" step="1">
     </div>
     <p class="hint">Pixel size per heightmap cell. Smaller = smoother terrain, larger = faster. Changing this discards existing heightmap data.</p>
   </div>

@@ -161,14 +161,14 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
   /**
    * Set while an image is being positioned on the canvas before import.
    * @type {{
-   *   container:  PIXI.Container,
-   *   sprite:     PIXI.Sprite,
-   *   borderGfx:  PIXI.Graphics,
-   *   cornerGfx:  PIXI.Graphics,
-   *   pixels:     Uint8ClampedArray,
-   *   imgW:       number,
-   *   imgH:       number,
-   *   options:    object
+   *   container:    PIXI.Container,
+   *   sprite:       PIXI.Sprite,
+   *   borderGfx:    PIXI.Graphics,
+   *   pixels:       Uint8ClampedArray,
+   *   imgW:         number,
+   *   imgH:         number,
+   *   options:      object,
+   *   naturalAspect: number,
    * }|null}
    */
   #importPreview = null;
@@ -180,16 +180,13 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
   #importDragState = null;
 
   // Line gradient tool state
-  /** @type {Array<{x:number, y:number, elev:number}>} Control points in pixel space */
-  #linePts = [];
-  /** When true, line tool uses auto-sampled canvas elevations; elevation inputs are hidden. */
-  #lineAutoInterpolate = false;
   /**
-   * When true (and #lineAutoInterpolate is also true), only the first and last
-   * control point elevations are used; all intermediate points are linearly
-   * interpolated between those two values by distance along the polyline.
+   * @type {Array<{x:number, y:number, elev:number, isWaypoint:boolean}>}
+   * Control points in pixel space.
+   * isWaypoint:true → point shapes the path but has no elevation of its own;
+   * its elevation is interpolated by arc length between neighbouring anchors.
    */
-  #lineFirstLastOnly = false;
+  #linePts = [];
   /** @type {PIXI.Graphics|null} Canvas preview showing points + connecting line */
   #lineGfx = null;
   /** @type {number} Gradient corridor width in pixels */
@@ -337,35 +334,65 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
 
       const p = canvas.mousePosition;
 
-      // ── Import preview mode: intercept for move / resize ─────────────────
+      // ── Import preview mode: intercept for move / resize / rotate ───────
       if (this.#importPreview) {
-        const { sprite, cornerGfx } = this.#importPreview;
-        // Hit radius for the corner handle in scene coordinates.
-        // 30 screen pixels regardless of zoom level.
+        const { sprite } = this.#importPreview;
+        const θ      = sprite.rotation;
+        const cosT   = Math.cos(θ), sinT = Math.sin(θ);
+        const cx     = sprite.x,    cy   = sprite.y;
+        const hw     = sprite.width / 2, hh = sprite.height / 2;
+        const toWorldFn = (lx, ly) => ({
+          x: cx + lx * cosT - ly * sinT,
+          y: cy + lx * sinT + ly * cosT,
+        });
         const zoomScale = canvas.stage?.scale?.x ?? 1;
-        const HANDLE_R  = 30 / zoomScale;
-        const dhx = p.x - cornerGfx.x;
-        const dhy = p.y - cornerGfx.y;
+        const HANDLE_R  = 20 / zoomScale;
+        const HR2       = HANDLE_R * HANDLE_R;
 
-        if (Math.abs(dhx) <= HANDLE_R && Math.abs(dhy) <= HANDLE_R) {
-          // Resize drag: anchor is the top-left corner, bottom-right moves
+        // Test all four corners (no visible handles — any corner is a resize grip)
+        const corners = [
+          { pt: toWorldFn(-hw, -hh), lx: -hw, ly: -hh, axLX:  hw, axLY:  hh }, // TL → anchor BR
+          { pt: toWorldFn( hw, -hh), lx:  hw, ly: -hh, axLX: -hw, axLY:  hh }, // TR → anchor BL
+          { pt: toWorldFn( hw,  hh), lx:  hw, ly:  hh, axLX: -hw, axLY: -hh }, // BR → anchor TL
+          { pt: toWorldFn(-hw,  hh), lx: -hw, ly:  hh, axLX:  hw, axLY: -hh }, // BL → anchor TR
+        ];
+
+        let hitCorner = null;
+        for (const c of corners) {
+          const dx = p.x - c.pt.x, dy = p.y - c.pt.y;
+          if (dx * dx + dy * dy <= HR2) { hitCorner = c; break; }
+        }
+
+        if (hitCorner) {
+          const anchorWorld = toWorldFn(hitCorner.axLX, hitCorner.axLY);
           this.#importDragState = {
             type: "corner",
-            startX: p.x, startY: p.y,
-            origX:  sprite.x,     origY:  sprite.y,
-            origW:  sprite.width, origH:  sprite.height,
+            origW: sprite.width, origH: sprite.height,
+            anchorLX: hitCorner.axLX, anchorLY: hitCorner.axLY,
+            anchorWorldX: anchorWorld.x, anchorWorldY: anchorWorld.y,
           };
-        } else if (
-          p.x >= sprite.x && p.x <= sprite.x + sprite.width &&
-          p.y >= sprite.y && p.y <= sprite.y + sprite.height
-        ) {
-          // Move drag
-          this.#importDragState = {
-            type: "move",
-            startX: p.x, startY: p.y,
-            origX:  sprite.x,     origY:  sprite.y,
-            origW:  sprite.width, origH:  sprite.height,
-          };
+        } else {
+          // Check body containment (un-rotate pointer to local space)
+          const dx    = p.x - cx, dy = p.y - cy;
+          const lxLoc = dx * cosT + dy * sinT;
+          const lyLoc = -dx * sinT + dy * cosT;
+          if (Math.abs(lxLoc) <= hw && Math.abs(lyLoc) <= hh) {
+            if (event.ctrlKey) {
+              // Ctrl+drag → rotate
+              this.#importDragState = {
+                type: "rotate",
+                startAngle:   Math.atan2(p.y - cy, p.x - cx),
+                origRotation: sprite.rotation,
+              };
+            } else {
+              // Plain drag → move
+              this.#importDragState = {
+                type: "move",
+                startX: p.x, startY: p.y,
+                origX: sprite.x, origY: sprite.y,
+              };
+            }
+          }
         }
         return; // never paint while preview is active
       }
@@ -374,6 +401,24 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
       // Line gradient: each click places a control point (no drag stroke)
       if (BrushState.mode === "line") {
         this.#placeLinePoint(p.x, p.y);
+        return;
+      }
+
+      // Elevation picker: sample elevation and update BrushState, then return to prior tool
+      if (BrushState.mode === "picker") {
+        const { cx, cy } = this.#pixelToCell(p.x, p.y);
+        const sampled = this.heightmap?.get(cx, cy) ?? 0;
+        if (sampled > 0) {
+          BrushState.fixedElevation = sampled;
+          BrushState.fillElevation  = sampled;
+          BrushState.paintFixed     = true;
+          // Brief toast feedback
+          ui.notifications?.info(
+            `Elevation picked: ${sampled} ${this.settings.units ?? "ft"}`
+          );
+        }
+        // Auto-switch back to the tool that was active before picking
+        this.activateTool(BrushState.prePicker);
         return;
       }
 
@@ -416,7 +461,7 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
     view.addEventListener("pointerdown", this._boundPointerDown);
 
     // pointermove — cursor tracking + drag painting
-    this._boundPointerMove = (_event) => {
+    this._boundPointerMove = (event) => {
       if (!this._isLayerActive()) return;
 
       const p = canvas.mousePosition;
@@ -424,19 +469,59 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
       // ── Import preview: handle drag ───────────────────────────────────────
       if (this.#importPreview) {
         if (this.#importDragState) {
-          const drag   = this.#importDragState;
-          const sprite = this.#importPreview.sprite;
-          const dx = p.x - drag.startX;
-          const dy = p.y - drag.startY;
+          const drag    = this.#importDragState;
+          const sprite  = this.#importPreview.sprite;
+          const minSize = this.heightmap?.cellSize ?? 10;
 
           if (drag.type === "move") {
-            sprite.x = drag.origX + dx;
-            sprite.y = drag.origY + dy;
-          } else {
-            // Resize: drag bottom-right corner, keep top-left fixed
-            sprite.width  = Math.max(this.heightmap?.cellSize ?? 10, drag.origW + dx);
-            sprite.height = Math.max(this.heightmap?.cellSize ?? 10, drag.origH + dy);
+            sprite.x = drag.origX + (p.x - drag.startX);
+            sprite.y = drag.origY + (p.y - drag.startY);
+
+          } else if (drag.type === "corner") {
+            // Resize while keeping the opposite (anchor) corner fixed.
+            // The sprite center is always the midpoint of opposite corners,
+            // regardless of rotation.
+            const θ     = sprite.rotation; // constant during drag
+            const cosT  = Math.cos(θ), sinT = Math.sin(θ);
+            const ax    = drag.anchorWorldX, ay = drag.anchorWorldY;
+
+            // Half-vector from anchor to pointer (= center-to-corner in world)
+            const hvX = (p.x - ax) / 2;
+            const hvY = (p.y - ay) / 2;
+
+            // Project onto sprite's local axes to get new half-dimensions
+            const cornerLX = hvX * cosT + hvY * sinT;   // signed local X
+            const cornerLY = -hvX * sinT + hvY * cosT;  // signed local Y
+
+            if (event.shiftKey) {
+              // Shift = aspect-locked resize
+              const scaleW = Math.abs(cornerLX) / (drag.origW / 2);
+              const scaleH = Math.abs(cornerLY) / (drag.origH / 2);
+              const scale  = Math.max(scaleW, scaleH,
+                                      minSize / Math.max(drag.origW, drag.origH));
+              sprite.width  = drag.origW * scale;
+              sprite.height = drag.origH * scale;
+              // Anchor stays fixed: recalculate centre from anchor + rotated half-dim
+              const aLXN  = drag.anchorLX / (drag.origW / 2); // ±1
+              const aLYN  = drag.anchorLY / (drag.origH / 2); // ±1
+              const hLX   = -aLXN * sprite.width  / 2; // local center-to-dragged-corner X
+              const hLY   = -aLYN * sprite.height / 2; // local center-to-dragged-corner Y
+              sprite.x = ax + hLX * cosT - hLY * sinT;
+              sprite.y = ay + hLX * sinT + hLY * cosT;
+            } else {
+              // Free resize: dragged corner follows pointer exactly
+              sprite.width  = Math.max(minSize, Math.abs(cornerLX) * 2);
+              sprite.height = Math.max(minSize, Math.abs(cornerLY) * 2);
+              // Center = anchor + half-vector to pointer
+              sprite.x = ax + hvX;
+              sprite.y = ay + hvY;
+            }
+
+          } else if (drag.type === "rotate") {
+            const curAngle = Math.atan2(p.y - sprite.y, p.x - sprite.x);
+            sprite.rotation = drag.origRotation + (curAngle - drag.startAngle);
           }
+
           this.#updateImportPreviewLayout();
         }
         return; // no brush cursor in preview mode
@@ -898,6 +983,24 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
     const gfx = this.#cursor;
     gfx.clear();
 
+    // Picker tool: small crosshair + eyedropper indicator
+    if (BrushState.mode === "picker") {
+      const R = 5, ARM = 14;
+      gfx.lineStyle(2, 0x000000, 0.8);
+      gfx.beginFill(0x66ccff, 0.92);
+      gfx.drawCircle(0, 0, R);
+      gfx.endFill();
+      gfx.lineStyle(1.5, 0x000000, 0.65);
+      gfx.moveTo(-ARM, 0);   gfx.lineTo(-(R + 2), 0);
+      gfx.moveTo( R + 2, 0); gfx.lineTo( ARM, 0);
+      gfx.moveTo(0, -ARM);   gfx.lineTo(0, -(R + 2));
+      gfx.moveTo(0,  R + 2); gfx.lineTo(0,  ARM);
+      if (this.#cursorLabel && !this.#cursor.children.includes(this.#cursorLabel)) {
+        this.#cursor.addChild(this.#cursorLabel);
+      }
+      return;
+    }
+
     // Fill tool: small crosshair point indicator — no radius circle
     if (BrushState.mode === "fill") {
       const R = 6, ARM = 16;
@@ -1069,11 +1172,29 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
     this.#updateOverlay();
   }
 
+  /**
+   * Programmatically switch to a named tool and keep the UI toolbar in sync.
+   * Used by the picker keybinding (E) to restore the previous tool on key-up.
+   * @param {string} toolName  e.g. "paint", "erase", "picker"
+   */
+  activateTool(toolName) {
+    BrushState.mode = toolName;
+    // Click the toolbar button to keep Foundry's control state in sync
+    document.querySelector(`[data-tool="${toolName}"]`)?.click();
+    this.refreshCursor();
+    this.updateOverlayForTool();
+  }
+
   #updateOverlay() {
     if (!this.#overlayEl) return;
 
     const mode = BrushState.mode;
-    const modeLabel = mode.charAt(0).toUpperCase() + mode.slice(1);
+    const MODE_LABELS = {
+      paint: "Paint", erase: "Erase", fill: "Fill",
+      flatten: "Flatten", slope: "Gradient", line: "Line Gradient",
+      picker: "Elevation Picker",
+    };
+    const modeLabel = MODE_LABELS[mode] ?? (mode.charAt(0).toUpperCase() + mode.slice(1));
     let toolControls = "";
 
     // Band ↔ elevation helpers (used in overlay HTML and event handlers below)
@@ -1150,28 +1271,8 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
           </div>`;
         break;
       case "line": {
-        // Auto-interpolate toggle
-        const autoRow = `
-          <div class="cr-overlay-group" style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-            <input type="checkbox" id="cr-line-auto" ${this.#lineAutoInterpolate ? "checked" : ""}>
-            <label for="cr-line-auto" style="cursor:pointer;font-size:0.9em;">
-              Auto-interpolate <span style="font-size:0.8em;opacity:0.6;">(use canvas elevation)</span>
-            </label>
-          </div>`;
-
-        // First/last-only sub-toggle (only shown when auto-interpolate is on)
-        const firstLastRow = this.#lineAutoInterpolate ? `
-          <div class="cr-overlay-group" style="display:flex;align-items:center;gap:6px;margin-bottom:6px;padding-left:18px;">
-            <input type="checkbox" id="cr-line-firstlast" ${this.#lineFirstLastOnly ? "checked" : ""}>
-            <label for="cr-line-firstlast" style="cursor:pointer;font-size:0.85em;">
-              First/last only <span style="opacity:0.6;">(linear A→B)</span>
-            </label>
-          </div>` : "";
-
-        // Pre-compute interpolated elevations for display when first/last-only is on
-        const displayPts = (this.#lineAutoInterpolate && this.#lineFirstLastOnly)
-          ? this.#computeInterpolatedPts()
-          : this.#linePts;
+        // Pre-compute resolved elevations for display (fills in waypoint elevations)
+        const displayPts = this.#resolveWaypointElevations();
 
         // Build per-point rows
         const pointRows = this.#linePts.map((p, i) => {
@@ -1179,19 +1280,28 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
             style="padding:1px 7px;background:rgba(200,50,50,0.35);border:1px solid rgba(255,80,80,0.45);
                    border-radius:3px;cursor:pointer;color:#ffaaaa;font-size:1em;"
             title="Remove point">✕</button>`;
-          if (this.#lineAutoInterpolate) {
+
+          // Waypoint toggle button
+          const isWp = !!p.isWaypoint;
+          const wpBtn = `<button class="cr-line-wp" data-idx="${i}"
+            style="padding:1px 7px;background:${isWp ? "rgba(80,140,220,0.55)" : "rgba(80,80,80,0.3)"};
+                   border:1px solid ${isWp ? "rgba(120,170,255,0.7)" : "rgba(160,160,160,0.4)"};
+                   border-radius:3px;cursor:pointer;
+                   color:${isWp ? "#aad0ff" : "rgba(200,200,200,0.6)"};
+                   font-size:0.75em;font-weight:600;"
+            title="${isWp ? "Remove waypoint (restore elevation control)" : "Make waypoint (elevation interpolated)"}">W</button>`;
+
+          if (isWp) {
             const displayElev = Math.round(displayPts[i].elev);
-            const isEndpoint  = i === 0 || i === this.#linePts.length - 1;
-            const tag = (this.#lineFirstLastOnly && !isEndpoint)
-              ? "<em style=\"font-size:0.8em;opacity:0.6;\">(interpolated)</em>"
-              : "<em style=\"font-size:0.8em;opacity:0.6;\">(sampled)</em>";
             return `
               <div class="cr-overlay-group" style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                 <span style="min-width:16px;font-size:0.8em;opacity:0.55;">${i + 1}.</span>
-                <span style="flex:1;font-size:0.9em;opacity:0.75;">${displayElev} ${UNITS} ${tag}</span>
+                <span style="flex:1;font-size:0.85em;opacity:0.6;font-style:italic;">waypoint <span style="opacity:0.75;">(~${displayElev} ${UNITS})</span></span>
+                ${wpBtn}
                 ${removeBtn}
               </div>`;
           }
+
           return `
             <div class="cr-overlay-group" style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
               <span style="min-width:16px;font-size:0.8em;opacity:0.55;">${i + 1}.</span>
@@ -1200,6 +1310,7 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
                 style="flex:1;background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.3);
                        border-radius:3px;color:#fff;padding:2px 6px;font-size:0.9em;">
               <span style="font-size:0.82em;opacity:0.6;">(${bandToElev(elevToBand(p.elev))} ${UNITS})</span>
+              ${wpBtn}
               ${removeBtn}
             </div>`;
         }).join("");
@@ -1218,37 +1329,45 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
             </button>
           </div>` : "";
 
-        const hintText = this.#lineAutoInterpolate
-          ? (this.#lineFirstLastOnly
-              ? "Click to place points. Only first and last elevations are used; middle points are linearly interpolated."
-              : "Click on the canvas to place control points. Elevations are sampled automatically.")
-          : "Click on the canvas to place control points.<br>Each point gets an elevation; the tool interpolates between them.";
-
         toolControls = `
-          ${autoRow}
-          ${firstLastRow}
           <div class="cr-overlay-group">
             <label>Width <span class="cr-overlay-value" data-for="lineWidth">${this.#lineWidthPx}px</span></label>
             <input type="range" name="lineWidth" min="10" max="2000" step="10" value="${this.#lineWidthPx}">
           </div>
           ${this.#linePts.length === 0
-            ? `<div class="cr-overlay-hint">${hintText}</div>`
-            : `<div style="font-size:0.8em;opacity:0.55;margin:4px 0 2px;">Points${this.#lineAutoInterpolate ? "" : " — set elevation for each"}:</div>${pointRows}`
+            ? `<div class="cr-overlay-hint">Click on the canvas to place control points.<br>Set elevation for each. Press <strong>W</strong> to mark a point as a waypoint (elevation interpolated between neighbours).</div>`
+            : `<div style="font-size:0.8em;opacity:0.55;margin:4px 0 2px;">Points — set elevation or mark as waypoint:</div>${pointRows}`
           }
           ${applyRow}`;
         break;
       }
+
+      case "picker": {
+        const picked = BrushState.fixedElevation;
+        toolControls = `
+          <div class="cr-overlay-hint">
+            Click any painted cell to sample its elevation.<br>
+            Returns to the previous tool after picking.<br>
+            <strong>E</strong> — hold to temporarily activate.
+          </div>
+          <div style="font-size:0.85em;opacity:0.7;margin-top:4px;">
+            Last picked: <strong>${picked} ${UNITS}</strong>
+          </div>`;
+        break;
+      }
     }
 
-    // The line gradient tool has no brush; hide the radius row for it.
-    const radiusRow = mode !== "line" ? `
+    // The line gradient and picker tools have no brush; hide the radius row for them.
+    const radiusRow = (mode !== "line" && mode !== "picker") ? `
       <div class="cr-overlay-group">
         <label>Brush Size <span class="cr-overlay-value" data-for="radius">${BrushState.radius}px</span></label>
-        <input type="range" name="radius" min="10" max="500" step="10" value="${BrushState.radius}">
+        <input type="range" name="radius" min="10" max="2000" step="10" value="${BrushState.radius}">
       </div>` : "";
 
+    // "Line Gradient Tool" and "Elevation Picker Tool" are already complete names
+    const titleSuffix = (mode === "line" || mode === "picker") ? "" : " Tool";
     this.#overlayEl.innerHTML = `
-      <div class="cr-overlay-title">${modeLabel} Tool</div>
+      <div class="cr-overlay-title">${modeLabel}${titleSuffix}</div>
       ${radiusRow}
       ${toolControls}`;
 
@@ -1323,17 +1442,16 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
 
     // ── Line gradient tool controls ──────────────────────────────────────────
 
-    // Auto-interpolate checkbox
-    this.#overlayEl.querySelector("#cr-line-auto")?.addEventListener("change", (e) => {
-      this.#lineAutoInterpolate = e.target.checked;
-      if (!this.#lineAutoInterpolate) this.#lineFirstLastOnly = false;
-      this.#updateOverlay();
-    });
-
-    // First/last-only sub-toggle (only present when auto-interpolate is on)
-    this.#overlayEl.querySelector("#cr-line-firstlast")?.addEventListener("change", (e) => {
-      this.#lineFirstLastOnly = e.target.checked;
-      this.#updateOverlay();
+    // Waypoint toggle buttons
+    this.#overlayEl.querySelectorAll("button.cr-line-wp").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.dataset.idx);
+        if (idx >= 0 && idx < this.#linePts.length) {
+          this.#linePts[idx].isWaypoint = !this.#linePts[idx].isWaypoint;
+          this.#updateOverlay();
+        }
+      });
     });
 
     // Line width slider
@@ -1397,6 +1515,9 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
       if (e.button !== 0) return;
       e.preventDefault();
       e.stopPropagation();
+      // Capture the pointer so fast moves don't lose the drag
+      handle.setPointerCapture(e.pointerId);
+      el.style.userSelect = "none";
 
       const startX = e.clientX;
       const startY = e.clientY;
@@ -1415,6 +1536,7 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
       };
 
       const onUp = () => {
+        el.style.userSelect = "";
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         // Persist position for rebuilds
@@ -1581,63 +1703,60 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
   /**
    * Begin the import preview phase.
    *
-   * Renders a semi-transparent image sprite over the scene.  The GM can drag
-   * it to reposition and drag the bottom-right corner handle to resize it.
-   * A Confirm / Cancel bar appears at the top of the canvas.
+   * Renders a semi-transparent image sprite over the scene.
+   *   · Drag any corner   → resize (free by default; Shift = aspect-locked)
+   *   · Drag body         → move
+   *   · Ctrl+drag body    → rotate
    *
-   * Call applyImportPreview() to bake the positioned image into the heightmap,
-   * or cancelImportPreview() to discard it.
+   * No visible handles are drawn — the corners of the sprite itself act as
+   * invisible resize grips.
+   *
+   * Call applyImportPreview() to bake into the heightmap,
+   * or cancelImportPreview() to discard.
    *
    * @param {{ imageEl:HTMLImageElement, pixels:Uint8ClampedArray,
-   *            imgW:number, imgH:number }}  analysis   From HeightmapImporter.analyzeImage()
-   * @param {object}   options   { baseElevation, increment, numBands, mode, invert }
+   *            imgW:number, imgH:number }}  analysis
+   * @param {object} options  { baseElevation, increment, numBands, mode, invert }
    */
   startImportPreview(analysis, options) {
     if (this.#importPreview) this.cancelImportPreview();
 
     const { imageEl, pixels, imgW, imgH } = analysis;
 
-    // Create PIXI texture from the already-decoded HTMLImageElement
     const texture = PIXI.Texture.from(imageEl);
     const sprite  = new PIXI.Sprite(texture);
     sprite.alpha  = 0.65;
 
-    // Default size/position: fit the scene rect
+    // Fit to scene rect while preserving natural aspect ratio
     const { x: sx, y: sy, width: sw, height: sh } = canvas.dimensions.sceneRect;
-    sprite.x      = sx;
-    sprite.y      = sy;
-    sprite.width  = sw;
-    sprite.height = sh;
+    const naturalAspect = imgW / imgH;
+    let initW = sw, initH = sw / naturalAspect;
+    if (initH > sh) { initH = sh; initW = sh * naturalAspect; }
 
-    // Dashed border outline drawn as a PIXI.Graphics (updated on every drag)
+    // Center pivot — sprite.x/y = world center, enabling correct rotation
+    sprite.pivot.set(sprite.texture.width / 2, sprite.texture.height / 2);
+    sprite.width  = initW;
+    sprite.height = initH;
+    sprite.x = sx + initW / 2;
+    sprite.y = sy + initH / 2;
+
+    // Border outline only — no corner or rotation handle graphics
     const borderGfx = new PIXI.Graphics();
-
-    // Corner resize handle at the bottom-right
-    const cornerGfx = new PIXI.Graphics();
 
     const container = new PIXI.Container();
     container.addChild(sprite);
     container.addChild(borderGfx);
-    container.addChild(cornerGfx);
     this.addChild(container);
 
-    // Hide brush cursor so it doesn't interfere visually
     if (this.#cursor) this.#cursor.visible = false;
 
-    this.#importPreview = { container, sprite, borderGfx, cornerGfx, pixels, imgW, imgH, options };
+    this.#importPreview = {
+      container, sprite, borderGfx,
+      pixels, imgW, imgH, options,
+      naturalAspect,
+    };
 
-    this.#updateImportPreviewLayout(); // draw border + position handle
-
-    // Small always-visible hint bar so the GM knows how to move/resize
-    // even while the settings window is minimized.
-    document.getElementById("cr-import-hint")?.remove();
-    const hintEl = document.createElement("div");
-    hintEl.id = "cr-import-hint";
-    hintEl.innerHTML =
-      `<i class="fa-solid fa-arrows-up-down-left-right"></i>&nbsp;Drag to move`
-      + `&nbsp;&nbsp;·&nbsp;&nbsp;`
-      + `<i class="fa-solid fa-expand"></i>&nbsp;Drag the <strong>■ corner</strong> (bottom-right) to resize`;
-    document.body.appendChild(hintEl);
+    this.#updateImportPreviewLayout();
   }
 
   /**
@@ -1655,17 +1774,21 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
 
     // Capture undo snapshot before modifying the heightmap
     const snapshot  = this.heightmap.takeSnapshot();
+    // The sprite uses center-pivot positioning; expose center + dimensions + rotation
     const spriteRect = {
-      x:      sprite.x,
-      y:      sprite.y,
-      width:  sprite.width,
-      height: sprite.height,
+      x:        sprite.x,       // world-space center X
+      y:        sprite.y,       // world-space center Y
+      width:    sprite.width,
+      height:   sprite.height,
+      rotation: sprite.rotation, // radians
     };
 
-    sampleToHeightmap(pixels, imgW, imgH, spriteRect, this.heightmap, options);
-
-    this.#pushUndo(snapshot);
-    this.#cleanupImportPreview(); // fires "contour-regions.importPreviewEnded" hook
+    try {
+      sampleToHeightmap(pixels, imgW, imgH, spriteRect, this.heightmap, options);
+      this.#pushUndo(snapshot);
+    } finally {
+      this.#cleanupImportPreview(); // fires "contour-regions.importPreviewEnded" hook
+    }
 
     this.refresh();
     this.#updateLegend();
@@ -1712,45 +1835,48 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
   }
 
   /**
-   * Reposition the border outline and corner handle to match the current
-   * sprite bounds.  Called after every drag update.
+   * Reposition the border outline to match the current sprite bounds including
+   * rotation.  Called after every drag update.
+   *
+   * No visible handles are rendered — the four sprite corners act as invisible
+   * resize grips (hit-tested in the pointer-down handler).
    */
   #updateImportPreviewLayout() {
-    const { sprite, borderGfx, cornerGfx } = this.#importPreview;
-    const { x, y, width: w, height: h } = sprite;
+    const { sprite, borderGfx } = this.#importPreview;
+    const cx = sprite.x, cy = sprite.y;
+    const w  = sprite.width, h = sprite.height;
+    const θ  = sprite.rotation;
+    const cosT = Math.cos(θ), sinT = Math.sin(θ);
 
-    // Dashed border — redraw each time since PIXI.Graphics doesn't support
-    // native dash styles; we approximate with short line segments.
+    const toWorld = (lx, ly) => ({
+      x: cx + lx * cosT - ly * sinT,
+      y: cy + lx * sinT + ly * cosT,
+    });
+
+    const tl = toWorld(-w / 2, -h / 2);
+    const tr = toWorld( w / 2, -h / 2);
+    const br = toWorld( w / 2,  h / 2);
+    const bl = toWorld(-w / 2,  h / 2);
+
     borderGfx.clear();
+    // White outer outline
     borderGfx.lineStyle(2, 0xffffff, 0.85);
-    borderGfx.drawRect(x, y, w, h);
-    // Inner dark outline for visibility on light backgrounds
+    borderGfx.moveTo(tl.x, tl.y);
+    borderGfx.lineTo(tr.x, tr.y);
+    borderGfx.lineTo(br.x, br.y);
+    borderGfx.lineTo(bl.x, bl.y);
+    borderGfx.closePath();
+    // Dark inner outline for contrast
     borderGfx.lineStyle(1, 0x000000, 0.4);
-    borderGfx.drawRect(x + 1, y + 1, w - 2, h - 2);
-
-    // Corner handle (resize grip) at the bottom-right
-    const cx = x + w;
-    const cy = y + h;
-    cornerGfx.clear();
-    // Shadow
-    cornerGfx.beginFill(0x000000, 0.4);
-    cornerGfx.drawRect(cx - 9, cy - 9, 18, 18);
-    cornerGfx.endFill();
-    // White square
-    cornerGfx.lineStyle(1.5, 0x000000, 0.9);
-    cornerGfx.beginFill(0xffffff, 0.92);
-    cornerGfx.drawRect(cx - 8, cy - 8, 16, 16);
-    cornerGfx.endFill();
-    // Resize arrows (two L-shapes indicating SE direction)
-    cornerGfx.lineStyle(2, 0x333333, 1);
-    cornerGfx.moveTo(cx - 4, cy - 1); cornerGfx.lineTo(cx + 2, cy - 1);
-    cornerGfx.moveTo(cx + 2, cy - 1); cornerGfx.lineTo(cx + 2, cy - 7);
-    cornerGfx.moveTo(cx - 4, cy + 3); cornerGfx.lineTo(cx + 4, cy + 3);
-    cornerGfx.moveTo(cx + 4, cy + 3); cornerGfx.lineTo(cx + 4, cy - 5);
-
-    // Store handle centre for hit testing in pointer-down
-    cornerGfx.x = cx;
-    cornerGfx.y = cy;
+    const in1 = toWorld(-w / 2 + 1, -h / 2 + 1);
+    const in2 = toWorld( w / 2 - 1, -h / 2 + 1);
+    const in3 = toWorld( w / 2 - 1,  h / 2 - 1);
+    const in4 = toWorld(-w / 2 + 1,  h / 2 - 1);
+    borderGfx.moveTo(in1.x, in1.y);
+    borderGfx.lineTo(in2.x, in2.y);
+    borderGfx.lineTo(in3.x, in3.y);
+    borderGfx.lineTo(in4.x, in4.y);
+    borderGfx.closePath();
   }
 
   // ·· General canvas helpers ··················································
@@ -1780,8 +1906,12 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
     if (!this.heightmap) return;
     const { cx, cy } = this.#pixelToCell(pixelX, pixelY);
     const sampledElev = this.heightmap.get(cx, cy);
-    const elev = sampledElev > 0 ? sampledElev : this.settings.increment;
-    this.#linePts.push({ x: pixelX, y: pixelY, elev });
+    // Default elevation: sampled cell > previous point > one increment
+    const prevElev = this.#linePts.length > 0
+      ? this.#linePts[this.#linePts.length - 1].elev
+      : 0;
+    const elev = sampledElev > 0 ? sampledElev : (prevElev > 0 ? prevElev : this.settings.increment);
+    this.#linePts.push({ x: pixelX, y: pixelY, elev, isWaypoint: false });
     this.#updateLineGfx();
     this.#updateOverlay();
   }
@@ -1880,28 +2010,181 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
   }
 
   /**
-   * Return a copy of #linePts where intermediate point elevations are linearly
-   * interpolated between the first and last point by cumulative polyline distance.
-   * Used when #lineAutoInterpolate && #lineFirstLastOnly are both true.
+   * Return a copy of #linePts with waypoint elevations filled in by arc-length
+   * interpolation between the nearest non-waypoint neighbours.
+   *
+   * The last point is always treated as a waypoint (end marker only).
+   * Non-waypoint points ("anchors") keep their explicit elevation unchanged.
+   * Waypoints before the first anchor get the first anchor's elevation;
+   * waypoints after the last anchor get the last anchor's elevation.
+   *
+   * @returns {Array<{x:number, y:number, elev:number, isWaypoint:boolean}>}
+   */
+  /**
+   * Build a densified version of #linePts suitable for applyLineGradient().
+   *
+   * The step transitions between two elevation anchors must happen at equal
+   * arc-length intervals along the drawn path, NOT at waypoint positions.
+   * This is achieved by inserting synthetic boundary points at the exact
+   * arc-distance where each step begins. Original waypoints are kept for
+   * path shape and given the elevation of the step they fall in.
+   *
    * @returns {Array<{x:number, y:number, elev:number}>}
    */
-  #computeInterpolatedPts() {
+  #densifyForLineGradient() {
     const pts = this.#linePts;
     if (pts.length < 2) return pts;
-    // Cumulative pixel distances along the polyline
+    const inc = Math.max(0.001, this.settings.increment);
+
+    // Cumulative arc-length along the full polyline
+    const dists = [0];
+    for (let i = 1; i < pts.length; i++) {
+      const dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+      dists.push(dists[i-1] + Math.sqrt(dx*dx + dy*dy));
+    }
+
+    // Elevation anchors (non-waypoint points — all points including the last)
+    const anchors = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (!pts[i].isWaypoint) anchors.push({ i, d: dists[i], elev: pts[i].elev });
+    }
+    if (anchors.length < 2) {
+      const elev = anchors.length ? anchors[0].elev : 0;
+      return pts.map(p => ({ x: p.x, y: p.y, elev }));
+    }
+
+    // World position at arc-distance D (linear interpolation along the polyline)
+    const posAtDist = (D) => {
+      for (let j = 0; j < pts.length - 1; j++) {
+        if (dists[j+1] >= D) {
+          const seg = dists[j+1] - dists[j];
+          const t   = seg > 0 ? (D - dists[j]) / seg : 0;
+          return { x: pts[j].x + t*(pts[j+1].x - pts[j].x),
+                   y: pts[j].y + t*(pts[j+1].y - pts[j].y) };
+        }
+      }
+      return { x: pts[pts.length-1].x, y: pts[pts.length-1].y };
+    };
+
+    // Step-function elevation at arc-distance D
+    const elevAtD = (D) => {
+      let bef = null, aft = null;
+      for (const a of anchors) {
+        if (a.d <= D) bef = a;
+        else if (!aft) { aft = a; break; }
+      }
+      if (!bef) return anchors[0].elev;
+      if (!aft) return bef.elev;
+      const span   = aft.d - bef.d;
+      const nSteps = Math.floor(Math.abs(aft.elev - bef.elev) / inc);
+      if (!nSteps || !span) return bef.elev;
+      const sLen = span / nSteps;
+      const idx  = Math.min(nSteps - 1, Math.floor((D - bef.d) / sLen));
+      return bef.elev + idx * inc * Math.sign(aft.elev - bef.elev);
+    };
+
+    // Build result: original points (step-resolved elevation) + synthetic
+    // boundary points inserted wherever a step transition falls between two
+    // consecutive original points.
+    const result = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (i > 0) {
+        const dA = dists[i-1], dB = dists[i];
+        // Find the anchor span that contains this segment
+        let bef = null, aft = null;
+        for (const a of anchors) {
+          if (a.d <= dA) bef = a;
+          else if (!aft) { aft = a; break; }
+        }
+        if (bef && aft) {
+          const span   = aft.d - bef.d;
+          const nSteps = Math.floor(Math.abs(aft.elev - bef.elev) / inc);
+          if (nSteps > 0 && span > 0) {
+            const sLen = span / nSteps;
+            const dir  = Math.sign(aft.elev - bef.elev);
+            const idxA = Math.min(nSteps-1, Math.floor((dA - bef.d) / sLen));
+            const idxB = Math.min(nSteps-1, Math.floor((dB - bef.d) / sLen));
+            // Insert a synthetic boundary point for each step transition crossed
+            for (let k = idxA + 1; k <= idxB; k++) {
+              const bD = bef.d + k * sLen;
+              if (bD > dA && bD < dB) {
+                const pos = posAtDist(bD);
+                result.push({ x: pos.x, y: pos.y, elev: bef.elev + k * inc * dir });
+              }
+            }
+          }
+        }
+      }
+      result.push({ x: pts[i].x, y: pts[i].y, elev: elevAtD(dists[i]) });
+    }
+    return result;
+  }
+
+  /**
+   * Return a copy of #linePts where waypoint elevations are filled in by the
+   * same arc-length step function used for painting.  Used only for the
+   * overlay display hints — the actual painted data uses #densifyForLineGradient.
+   *
+   * @returns {Array<{x:number, y:number, elev:number, isWaypoint:boolean}>}
+   */
+  #resolveWaypointElevations() {
+    const pts = this.#linePts;
+    if (pts.length < 2) return pts;
+
+    const inc = Math.max(0.001, this.settings.increment);
+
+    // Build cumulative arc-length array (in pixel space)
     const dists = [0];
     for (let i = 1; i < pts.length; i++) {
       const dx = pts[i].x - pts[i - 1].x;
       const dy = pts[i].y - pts[i - 1].y;
       dists.push(dists[i - 1] + Math.sqrt(dx * dx + dy * dy));
     }
-    const total = dists[pts.length - 1];
-    const e0    = pts[0].elev;
-    const e1    = pts[pts.length - 1].elev;
-    return pts.map((p, i) => ({
-      ...p,
-      elev: total > 0 ? e0 + (e1 - e0) * (dists[i] / total) : e0,
-    }));
+
+    // Identify elevation anchors (non-waypoint points — all points including last)
+    const anchors = pts
+      .map((p, i) => ({ i, d: dists[i], elev: p.elev }))
+      .filter((_, i) => !pts[i].isWaypoint);
+
+    // If no anchors, return as-is (degenerate case — UI should prevent this)
+    if (anchors.length === 0) return pts.map(p => ({ ...p }));
+
+    return pts.map((p, i) => {
+      // Non-waypoint anchors keep their explicitly-set elevation unchanged
+      if (!p.isWaypoint) return { ...p };
+
+      const d = dists[i];
+
+      // Find the nearest anchors before and after this waypoint
+      let before = null, after = null;
+      for (const a of anchors) {
+        if (a.d <= d) before = a;
+        else if (after === null) after = a;
+      }
+
+      let elev;
+      if (before === null) {
+        elev = anchors[0].elev;
+      } else if (after === null) {
+        elev = before.elev;
+      } else {
+        // Equal-distance step function: divide the arc between the two anchors
+        // into floor(|y-x|/n) equal-length segments, one increment each.
+        // The waypoint gets the elevation of the step it falls in.
+        // floor() ensures we never overshoot y when |y-x| is not a clean multiple of n.
+        const span     = after.d - before.d;
+        const numSteps = Math.floor(Math.abs(after.elev - before.elev) / inc);
+        if (numSteps === 0 || span === 0) {
+          elev = before.elev;
+        } else {
+          const stepLen = span / numSteps;
+          const relD    = d - before.d;
+          const stepIdx = Math.min(numSteps - 1, Math.floor(relD / stepLen));
+          elev = before.elev + stepIdx * inc * Math.sign(after.elev - before.elev);
+        }
+      }
+      return { ...p, elev };
+    });
   }
 
   /**
@@ -1914,10 +2197,9 @@ export class ContourLayer extends foundry.canvas.layers.InteractionLayer {
 
     const snapshot = this.heightmap.takeSnapshot();
     const widthCells = Math.max(0.5, this.#lineWidthPx / this.heightmap.cellSize);
-    // When first/last-only is on, recompute intermediate elevations before applying
-    const applyPts = (this.#lineAutoInterpolate && this.#lineFirstLastOnly)
-      ? this.#computeInterpolatedPts()
-      : this.#linePts;
+    // Build densified point array: step boundaries inserted at correct arc-length
+    // positions so elevation transitions are independent of waypoint placement.
+    const applyPts = this.#densifyForLineGradient();
     this.heightmap.applyLineGradient(
       applyPts,
       widthCells,

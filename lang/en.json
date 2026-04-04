@@ -10,8 +10,13 @@
       "LockPainted": "Lock Painted — raise empty only",
       "SlopeTool": "Gradient Brush",
       "LineTool": "Line Gradient",
+      "PickerTool": "Elevation Picker",
       "ClearCanvas": "Clear Heightmap",
       "OpenSettings": "Contour Settings"
+    },
+    "Keybinding": {
+      "PickerTool": "Elevation Picker",
+      "PickerToolHint": "Hold to temporarily activate the elevation picker. Release to return to the previous tool."
     },
     "Settings": {
       "Title": "Contour Region Settings",
